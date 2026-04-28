@@ -25,7 +25,7 @@ final class MainViewModel: ObservableObject {
 
     let minimumOCRConfidence: Float = 0.45
     let minimumTextLength: Int = 4
-    let stableFrameThreshold: Int = 2
+    let stableFrameThreshold: Int = 1
     let duplicateCooldown: TimeInterval = 8
 
     private var lastSpokenNormalizedText: String = ""
@@ -37,6 +37,10 @@ final class MainViewModel: ObservableObject {
 
     private var lastRecognizedForManualRead: String = ""
     private let maxHistoryCount = 10
+
+    // MARK: - Reading Lock
+    private var lockedReadingText: String = ""
+    private var mustWaitForNewText: Bool = false
     
     func updateDeviceOrientation() {
         cameraService.updateOrientation(for: UIDevice.current.orientation)
@@ -150,6 +154,19 @@ final class MainViewModel: ObservableObject {
     }
 
     private func handleStableDetection(rawText: String, normalizedText: String, confidence: Float) {
+        // Jika aplikasi sedang membacakan teks, jangan proses bacaan baru dulu.
+        guard !speechService.isSpeaking else {
+            statusText = "Sedang membacakan teks"
+            return
+        }
+
+        // Jika teks yang sama sudah pernah dibacakan, jangan baca ulang.
+        // Pengguna harus reset dulu jika ingin membaca ulang teks yang sama.
+        if mustWaitForNewText && isTextSimilar(normalizedText, lockedReadingText) {
+            statusText = "Teks sudah dibacakan"
+            return
+        }
+
         if normalizedText == candidateNormalizedText {
             candidateStableCount += 1
         } else {
@@ -173,6 +190,7 @@ final class MainViewModel: ObservableObject {
             normalizedText: normalizedText,
             confidence: confidence
         )
+
         addToHistory(item)
 
         if autoReadEnabled {
@@ -190,15 +208,57 @@ final class MainViewModel: ObservableObject {
             readingHistory = Array(readingHistory.prefix(maxHistoryCount))
         }
     }
+    
+    private func isTextSimilar(_ firstText: String, _ secondText: String) -> Bool {
+        let first = firstText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let second = secondText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !first.isEmpty, !second.isEmpty else { return false }
+
+        if first == second {
+            return true
+        }
+
+        if first.contains(second) || second.contains(first) {
+            return true
+        }
+
+        let firstWords = Set(first.split(separator: " ").map { String($0) })
+        let secondWords = Set(second.split(separator: " ").map { String($0) })
+
+        guard !firstWords.isEmpty, !secondWords.isEmpty else { return false }
+
+        let sameWords = firstWords.intersection(secondWords).count
+        let totalWords = max(firstWords.count, secondWords.count)
+
+        let similarity = Double(sameWords) / Double(totalWords)
+
+        return similarity >= 0.75
+    }
 
     func readCurrentTextNow() {
+        guard !speechService.isSpeaking else {
+            statusText = "Tunggu sampai bacaan selesai"
+            AccessibilityHelper.hapticWarning()
+            return
+        }
+
         let text = lastRecognizedForManualRead.trimmingCharacters(in: .whitespacesAndNewlines)
+
         guard !text.isEmpty, text != "Belum ada teks" else {
             speechService.speakFeedback("Belum ada teks untuk dibacakan")
             return
         }
 
         let normalized = StringNormalizer.normalize(text)
+
+        if mustWaitForNewText && isTextSimilar(normalized, lockedReadingText) {
+            speechService.speakFeedback("Teks ini sudah dibacakan. Tekan lama untuk reset jika ingin membaca ulang.")
+            statusText = "Teks sudah dibacakan"
+            AccessibilityHelper.hapticWarning()
+            return
+        }
+
         readText(text, normalized: normalized)
     }
 
@@ -217,10 +277,17 @@ final class MainViewModel: ObservableObject {
     }
 
     private func readText(_ text: String, normalized: String) {
+        // Kunci teks yang sedang dibaca.
+        // Setelah ini, teks yang sama tidak akan dibaca ulang otomatis.
+        lockedReadingText = normalized
+        mustWaitForNewText = true
+
         speechService.speak(text)
+
         lastSpokenNormalizedText = normalized
         lastSpokenAt = Date()
         statusText = "Membacakan teks"
+
         AccessibilityHelper.hapticSuccess()
     }
 
@@ -235,6 +302,25 @@ final class MainViewModel: ObservableObject {
     func pauseOrResumeSpeech() {
         speechService.pauseOrResume()
         speechService.speakFeedback("Kontrol suara dijalankan")
+    }
+    
+    func stopSpeechAndReset() {
+        speechService.stopSpeaking()
+
+        candidateNormalizedText = ""
+        candidateRawText = ""
+        candidateStableCount = 0
+
+        latestRecognizedText = "Belum ada teks"
+        lastRecognizedForManualRead = ""
+
+        lockedReadingText = ""
+        mustWaitForNewText = false
+
+        statusText = "Scan diulang"
+
+        speechService.speakFeedback("Bacaan dihentikan. Arahkan kamera ke teks.")
+        AccessibilityHelper.hapticWarning()
     }
 
     func handleKeyInput(_ input: String) {
