@@ -5,6 +5,8 @@ import Combine
 
 @MainActor
 final class MainViewModel: ObservableObject {
+    @Published var activeMode: VisionMode = .textReading
+    @Published var latestHeldObjectText: String = "Belum ada objek"
     @Published var statusText: String = "Menunggu inisialisasi"
     @Published var latestRecognizedText: String = "Belum ada teks"
     @Published var isScanning = false
@@ -27,6 +29,14 @@ final class MainViewModel: ObservableObject {
     let minimumTextLength: Int = 4
     let stableFrameThreshold: Int = 1
     let duplicateCooldown: TimeInterval = 8
+    let heldObjectRecognitionService = HeldObjectRecognitionService()
+    
+    private var lastSpokenObjectLabel: String = ""
+    private var lastObjectSpokenAt: Date = .distantPast
+    private var candidateObjectLabel: String = ""
+    private var candidateObjectStableCount: Int = 0
+    private let objectStableThreshold: Int = 3
+    private let objectDuplicateCooldown: TimeInterval = 5
 
     private var lastSpokenNormalizedText: String = ""
     private var lastSpokenAt: Date = .distantPast
@@ -115,6 +125,16 @@ final class MainViewModel: ObservableObject {
     }
 
     private func processFrame(_ sampleBuffer: CMSampleBuffer) {
+        switch activeMode {
+        case .textReading:
+            processTextFrame(sampleBuffer)
+
+        case .heldObject:
+            processHeldObjectFrame(sampleBuffer)
+        }
+    }
+    
+    private func processTextFrame(_ sampleBuffer: CMSampleBuffer) {
         textRecognitionService.recognizeText(
             from: sampleBuffer,
             minimumConfidence: minimumOCRConfidence,
@@ -197,6 +217,77 @@ final class MainViewModel: ObservableObject {
             readText(rawText, normalized: normalizedText)
         }
     }
+    
+    private func processHeldObjectFrame(_ sampleBuffer: CMSampleBuffer) {
+        guard !speechService.isSpeaking else {
+            statusText = "Sedang membacakan"
+            return
+        }
+
+        heldObjectRecognitionService.recognizeHeldObject(
+            from: sampleBuffer,
+            orientation: cameraService.visionOrientation
+        ) { [weak self] result in
+            guard let self else { return }
+
+            switch result {
+            case .success(let maybeObject):
+                guard let object = maybeObject else {
+                    self.statusText = "Arahkan kamera ke benda yang dipegang"
+                    return
+                }
+
+                self.latestHeldObjectText = object.spokenLabel
+                self.statusText = "Objek di tangan terdeteksi: \(object.spokenLabel)"
+
+                self.handleStableHeldObject(object)
+
+            case .failure(let error):
+                self.errorMessage = error.localizedDescription
+                self.statusText = "Deteksi objek gagal"
+            }
+        }
+    }
+    
+    private func handleStableHeldObject(_ object: DetectedHeldObject) {
+        let normalizedLabel = object.spokenLabel.lowercased()
+
+        if normalizedLabel == candidateObjectLabel {
+            candidateObjectStableCount += 1
+        } else {
+            candidateObjectLabel = normalizedLabel
+            candidateObjectStableCount = 1
+        }
+
+        guard candidateObjectStableCount >= objectStableThreshold else {
+            return
+        }
+
+        let now = Date()
+        let isSameAsLastObject = normalizedLabel == lastSpokenObjectLabel
+        let isWithinCooldown = now.timeIntervalSince(lastObjectSpokenAt) < objectDuplicateCooldown
+
+        if isSameAsLastObject && isWithinCooldown {
+            return
+        }
+
+        speakHeldObject(object.spokenLabel)
+    }
+    
+    private func speakHeldObject(_ objectName: String) {
+        guard !objectName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+
+        let sentence = "Objek yang Anda pegang adalah \(objectName)"
+
+        speechService.speak(sentence)
+
+        lastSpokenObjectLabel = objectName.lowercased()
+        lastObjectSpokenAt = Date()
+        statusText = "Membacakan objek"
+        AccessibilityHelper.hapticSuccess()
+    }
 
     private func addToHistory(_ item: RecognizedTextItem) {
         if readingHistory.first?.normalizedText == item.normalizedText {
@@ -206,6 +297,39 @@ final class MainViewModel: ObservableObject {
         readingHistory.insert(item, at: 0)
         if readingHistory.count > maxHistoryCount {
             readingHistory = Array(readingHistory.prefix(maxHistoryCount))
+        }
+    }
+    
+    func toggleVisionMode() {
+        stopSpeechAndReset()
+
+        switch activeMode {
+        case .textReading:
+            activeMode = .heldObject
+        case .heldObject:
+            activeMode = .textReading
+        }
+
+        statusText = activeMode.title
+        speechService.speakFeedback(activeMode.voiceMessage)
+        AccessibilityHelper.announce(activeMode.voiceMessage)
+        AccessibilityHelper.hapticSuccess()
+    }
+    
+    func handlePrimaryTap() {
+        switch activeMode {
+        case .textReading:
+            readCurrentTextNow()
+
+        case .heldObject:
+            let objectName = latestHeldObjectText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard !objectName.isEmpty, objectName != "Belum ada objek" else {
+                speechService.speakFeedback("Belum ada objek yang dipegang terdeteksi")
+                return
+            }
+
+            speakHeldObject(objectName)
         }
     }
     
@@ -331,13 +455,13 @@ final class MainViewModel: ObservableObject {
         switch action {
         case .triggerScan:
             speechService.speakFeedback("Perintah scan diterima")
-            readCurrentTextNow()
+            handlePrimaryTap()
 
         case .repeatLastSpeech:
             repeatLastSpeech()
 
         case .toggleAutoRead:
-            toggleAutoRead()
+            toggleVisionMode()
 
         case .pauseOrResumeSpeech:
             pauseOrResumeSpeech()

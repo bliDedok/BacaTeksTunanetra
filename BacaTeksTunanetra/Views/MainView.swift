@@ -6,7 +6,19 @@ struct MainView: View {
     private var singleTapGesture: some Gesture {
         TapGesture(count: 1)
             .onEnded {
-                viewModel.readCurrentTextNow()
+                viewModel.handlePrimaryTap()
+            }
+    }
+    
+    private var swipeGesture: some Gesture {
+        DragGesture(minimumDistance: 60)
+            .onEnded { value in
+                let horizontalAmount = value.translation.width
+                let verticalAmount = value.translation.height
+
+                if abs(horizontalAmount) > abs(verticalAmount) {
+                    viewModel.toggleVisionMode()
+                }
             }
     }
 
@@ -53,6 +65,7 @@ struct MainView: View {
             ExclusiveGesture(doubleTapGesture, singleTapGesture)
         )
         .simultaneousGesture(longPressGesture)
+        .simultaneousGesture(swipeGesture)
         .onAppear {
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
             viewModel.updateDeviceOrientation()
