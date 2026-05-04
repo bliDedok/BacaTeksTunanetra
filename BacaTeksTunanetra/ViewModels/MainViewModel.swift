@@ -27,7 +27,7 @@ final class MainViewModel: ObservableObject {
 
     let minimumOCRConfidence: Float = 0.45
     let minimumTextLength: Int = 4
-    let stableFrameThreshold: Int = 1
+    let stableFrameThreshold: Int = 3
     let duplicateCooldown: TimeInterval = 8
     let heldObjectRecognitionService = HeldObjectRecognitionService()
     
