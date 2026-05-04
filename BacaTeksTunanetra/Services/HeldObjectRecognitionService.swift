@@ -14,7 +14,7 @@ final class HeldObjectRecognitionService {
 
     private let handDetectionService = HandDetectionService()
 
-    private let minimumObjectConfidence: Float = 0.45
+    private let minimumObjectConfidence: Float = 0.55
     private let minimumOverlapRatio: CGFloat = 0.12
     private let handExpansionMargin: CGFloat = 0.22
     
@@ -218,9 +218,16 @@ final class HeldObjectRecognitionService {
             }
         }
     }
+    
+    private func normalizedLabel(_ label: String) -> String {
+        label
+            .lowercased()
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+    }
 
     private func shouldIgnore(label: String) -> Bool {
-        let lowercased = label.lowercased()
+        let lowercased = normalizedLabel(label)
 
         let ignoredKeywords = [
             "hand",
@@ -237,7 +244,7 @@ final class HeldObjectRecognitionService {
     }
     
     private func isAllowedHeldObject(rawLabel: String) -> Bool {
-        let lowercased = rawLabel.lowercased()
+        let lowercased = normalizedLabel(rawLabel)
 
         let allowedKeywords = [
             "cell phone",
@@ -261,7 +268,7 @@ final class HeldObjectRecognitionService {
     }
 
     private func localizeLabel(_ label: String) -> String {
-        let lowercased = label.lowercased()
+        let lowercased = normalizedLabel(label)
 
         if lowercased.contains("cell phone") ||
             lowercased.contains("mobile phone") ||
