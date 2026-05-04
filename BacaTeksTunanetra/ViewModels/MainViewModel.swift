@@ -15,6 +15,7 @@ final class MainViewModel: ObservableObject {
     @Published var cameraPermissionDenied = false
     @Published var errorMessage: String?
     @Published var readingHistory: [RecognizedTextItem] = []
+    @Published var detectionLogs: [DetectionLogItem] = []
 
     @Published var keyboardRemoteDetected = false
     @Published var bleRemoteDetected = false
@@ -130,6 +131,38 @@ final class MainViewModel: ObservableObject {
     func toggleScanning() {
         isScanning ? pauseScanning() : startScanning()
     }
+    
+    private func addDetectionLog(
+        mode: DetectionLogItem.DetectionMode,
+        prediction: String,
+        confidence: Float? = nil,
+        processingTime: TimeInterval? = nil,
+        groundTruth: String? = nil,
+        isCorrect: Bool? = nil
+    ) {
+        let trimmedPrediction = prediction.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !trimmedPrediction.isEmpty else {
+            return
+        }
+
+        let logItem = DetectionLogItem(
+            mode: mode,
+            prediction: trimmedPrediction,
+            confidence: confidence,
+            processingTime: processingTime,
+            groundTruth: groundTruth,
+            isCorrect: isCorrect
+        )
+
+        detectionLogs.insert(logItem, at: 0)
+
+        if detectionLogs.count > 300 {
+            detectionLogs.removeLast()
+        }
+
+        print("DETECTION LOG:", logItem)
+    }
 
     private func processFrame(_ sampleBuffer: CMSampleBuffer) {
 
@@ -184,6 +217,8 @@ final class MainViewModel: ObservableObject {
     }
     
     private func processTextFrame(_ sampleBuffer: CMSampleBuffer) {
+        let startTime = Date()
+
         textRecognitionService.recognizeText(
             from: sampleBuffer,
             minimumConfidence: minimumOCRConfidence,
@@ -205,9 +240,18 @@ final class MainViewModel: ObservableObject {
                     return
                 }
 
+                let processingTime = Date().timeIntervalSince(startTime)
+
                 self.latestRecognizedText = text
                 self.lastRecognizedForManualRead = text
                 self.statusText = "Teks terdeteksi"
+
+                self.addDetectionLog(
+                    mode: .textReading,
+                    prediction: text,
+                    confidence: ocr.averageConfidence,
+                    processingTime: processingTime
+                )
 
                 self.handleStableDetection(
                     rawText: text,
@@ -268,6 +312,8 @@ final class MainViewModel: ObservableObject {
     }
     
     private func processHeldObjectFrame(_ sampleBuffer: CMSampleBuffer) {
+        let startTime = Date()
+
         guard !speechService.isSpeaking else {
             statusText = "Sedang membacakan"
             return
@@ -294,8 +340,17 @@ final class MainViewModel: ObservableObject {
                     return
                 }
 
+                let processingTime = Date().timeIntervalSince(startTime)
+
                 self.latestHeldObjectText = object.spokenLabel
                 self.statusText = "Objek: \(object.spokenLabel) \(Int(object.confidence * 100))%"
+
+                self.addDetectionLog(
+                    mode: .heldObject,
+                    prediction: object.spokenLabel,
+                    confidence: object.confidence,
+                    processingTime: processingTime
+                )
 
                 print("ML DETECTED:", object.rawLabel, object.spokenLabel, object.confidence)
 
@@ -529,5 +584,43 @@ final class MainViewModel: ObservableObject {
         case .pauseOrResumeSpeech:
             pauseOrResumeSpeech()
         }
+    }
+    
+    func exportDetectionLogsCSV() -> URL? {
+        guard !detectionLogs.isEmpty else {
+            return nil
+        }
+
+        let formatter = ISO8601DateFormatter()
+
+        var csv = "timestamp,mode,prediction,confidence,processing_time,ground_truth,is_correct\n"
+
+        for log in detectionLogs.reversed() {
+            let timestamp = formatter.string(from: log.timestamp)
+            let mode = log.mode.rawValue
+            let prediction = escapeCSV(log.prediction)
+            let confidence = log.confidence.map { String(format: "%.4f", $0) } ?? ""
+            let processingTime = log.processingTime.map { String(format: "%.4f", $0) } ?? ""
+            let groundTruth = escapeCSV(log.groundTruth ?? "")
+            let isCorrect = log.isCorrect.map { $0 ? "true" : "false" } ?? ""
+
+            csv += "\(timestamp),\(mode),\(prediction),\(confidence),\(processingTime),\(groundTruth),\(isCorrect)\n"
+        }
+
+        let fileName = "detection_logs_\(Int(Date().timeIntervalSince1970)).csv"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+
+        do {
+            try csv.write(to: url, atomically: true, encoding: .utf8)
+            return url
+        } catch {
+            print("Gagal export CSV:", error.localizedDescription)
+            return nil
+        }
+    }
+
+    private func escapeCSV(_ value: String) -> String {
+        let escaped = value.replacingOccurrences(of: "\"", with: "\"\"")
+        return "\"\(escaped)\""
     }
 }
