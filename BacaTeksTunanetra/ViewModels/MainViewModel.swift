@@ -31,6 +31,12 @@ final class MainViewModel: ObservableObject {
     let duplicateCooldown: TimeInterval = 8
     let heldObjectRecognitionService = HeldObjectRecognitionService()
     
+    private var lastTextFrameProcessedAt: Date = .distantPast
+    private var lastObjectFrameProcessedAt: Date = .distantPast
+
+    private let textFrameProcessingInterval: TimeInterval = 0.30
+    private let objectFrameProcessingInterval: TimeInterval = 0.35
+    
     private var lastSpokenObjectLabel: String = ""
     private var lastObjectSpokenAt: Date = .distantPast
     private var candidateObjectLabel: String = ""
@@ -126,13 +132,55 @@ final class MainViewModel: ObservableObject {
     }
 
     private func processFrame(_ sampleBuffer: CMSampleBuffer) {
+
         switch activeMode {
+
         case .textReading:
+
+            guard shouldProcessTextFrame() else { return }
+
             processTextFrame(sampleBuffer)
 
         case .heldObject:
+
+            guard shouldProcessObjectFrame() else { return }
+
             processHeldObjectFrame(sampleBuffer)
+
         }
+
+    }
+    
+    private func shouldProcessTextFrame() -> Bool {
+
+        let now = Date()
+
+        guard now.timeIntervalSince(lastTextFrameProcessedAt) >= textFrameProcessingInterval else {
+
+            return false
+
+        }
+
+        lastTextFrameProcessedAt = now
+
+        return true
+
+    }
+
+    private func shouldProcessObjectFrame() -> Bool {
+
+        let now = Date()
+
+        guard now.timeIntervalSince(lastObjectFrameProcessedAt) >= objectFrameProcessingInterval else {
+
+            return false
+
+        }
+
+        lastObjectFrameProcessedAt = now
+
+        return true
+
     }
     
     private func processTextFrame(_ sampleBuffer: CMSampleBuffer) {
@@ -447,21 +495,19 @@ final class MainViewModel: ObservableObject {
     
     func stopSpeechAndReset() {
         speechService.stopSpeaking()
-
         candidateNormalizedText = ""
         candidateRawText = ""
         candidateStableCount = 0
-
+        lastTextFrameProcessedAt = .distantPast
+        lastObjectFrameProcessedAt = .distantPast
         latestRecognizedText = "Belum ada teks"
         lastRecognizedForManualRead = ""
-
         lockedReadingText = ""
         mustWaitForNewText = false
-
         statusText = "Scan diulang"
-
         speechService.speakFeedback("Bacaan dihentikan. Arahkan kamera ke teks.")
         AccessibilityHelper.hapticWarning()
+
     }
 
     func handleKeyInput(_ input: String) {
