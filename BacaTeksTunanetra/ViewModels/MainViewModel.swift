@@ -37,6 +37,7 @@ final class MainViewModel: ObservableObject {
     private var candidateObjectStableCount: Int = 0
     private let objectStableThreshold: Int = 3
     private let objectDuplicateCooldown: TimeInterval = 5
+    private var isProcessingHeldObjectFrame = false
 
     private var lastSpokenNormalizedText: String = ""
     private var lastSpokenAt: Date = .distantPast
@@ -224,11 +225,19 @@ final class MainViewModel: ObservableObject {
             return
         }
 
+        guard !isProcessingHeldObjectFrame else {
+            return
+        }
+
+        isProcessingHeldObjectFrame = true
+
         heldObjectRecognitionService.recognizeHeldObject(
             from: sampleBuffer,
             orientation: cameraService.visionOrientation
-        ) { [weak self] result in
+        ) { [weak self] (result: Result<DetectedHeldObject?, Error>) in
             guard let self else { return }
+
+            self.isProcessingHeldObjectFrame = false
 
             switch result {
             case .success(let maybeObject):
@@ -238,11 +247,19 @@ final class MainViewModel: ObservableObject {
                 }
 
                 self.latestHeldObjectText = object.spokenLabel
-                self.statusText = "Objek di tangan terdeteksi: \(object.spokenLabel)"
+                self.statusText = "Objek: \(object.spokenLabel) \(Int(object.confidence * 100))%"
+
+                print("ML DETECTED:", object.rawLabel, object.spokenLabel, object.confidence)
 
                 self.handleStableHeldObject(object)
 
             case .failure(let error):
+                let message = error.localizedDescription.lowercased()
+
+                if message.contains("cancel") || message.contains("cancelled") {
+                    return
+                }
+
                 self.errorMessage = error.localizedDescription
                 self.statusText = "Deteksi objek gagal"
             }
@@ -309,7 +326,7 @@ final class MainViewModel: ObservableObject {
         case .heldObject:
             activeMode = .textReading
         }
-
+        print("ACTIVE MODE:", activeMode)
         statusText = activeMode.title
         speechService.speakFeedback(activeMode.voiceMessage)
         AccessibilityHelper.announce(activeMode.voiceMessage)
@@ -461,7 +478,7 @@ final class MainViewModel: ObservableObject {
             repeatLastSpeech()
 
         case .toggleAutoRead:
-            toggleVisionMode()
+            toggleAutoRead()
 
         case .pauseOrResumeSpeech:
             pauseOrResumeSpeech()

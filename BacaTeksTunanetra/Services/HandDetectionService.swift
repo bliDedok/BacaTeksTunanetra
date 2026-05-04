@@ -70,18 +70,4 @@ private extension CGRect {
             height: height + extraHeight
         )
     }
-
-    func clampedToUnitRect() -> CGRect {
-        let newX = max(0, min(origin.x, 1))
-        let newY = max(0, min(origin.y, 1))
-        let newMaxX = max(0, min(maxX, 1))
-        let newMaxY = max(0, min(maxY, 1))
-
-        return CGRect(
-            x: newX,
-            y: newY,
-            width: max(0, newMaxX - newX),
-            height: max(0, newMaxY - newY)
-        )
-    }
 }
